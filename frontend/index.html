@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Monitoring Dashboard</title>
+
+    <style>
+        body {
+            font-family: Arial;
+            background: #f4f6f8;
+            padding: 20px;
+        }
+
+        h1 {
+            margin-bottom: 10px;
+        }
+
+        table {
+            width: 100%;
+            background: white;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th, td {
+            padding: 10px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        th {
+            background: #111;
+            color: white;
+        }
+
+        .up { color: green; font-weight: bold; }
+        .down { color: red; font-weight: bold; }
+
+        .chart-box {
+            background: white;
+            padding: 15px;
+            margin-top: 20px;
+        }
+
+    </style>
+
+</head>
+
+<body>
+
+<h1>Hybrid Monitoring Dashboard</h1>
+
+<div class="chart-box">
+    <h3>Response Time (Live)</h3>
+    <canvas id="chart"></canvas>
+</div>
+
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Service</th>
+            <th>URL</th>
+            <th>Status</th>
+            <th>Response Time</th>
+            <th>Total Checks</th>
+            <th>Uptime %</th>
+        </tr>
+    </thead>
+    <tbody id="data"></tbody>
+</table>
+
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+
+const socket = io("http://localhost:5000");
+
+let chart;
+let chartData = {
+    labels: [],
+    datasets: [{
+        label: "Response Time (ms)",
+        data: []
+    }]
+};
+
+function initChart() {
+    const ctx = document.getElementById('chart');
+
+    chart = new Chart(ctx, {
+        type: 'line',
+        data: chartData
+    });
+}
+
+function updateChart(latency) {
+
+    const time = new Date().toLocaleTimeString();
+
+    chartData.labels.push(time);
+    chartData.datasets[0].data.push(latency);
+
+    if (chartData.labels.length > 10) {
+        chartData.labels.shift();
+        chartData.datasets[0].data.shift();
+    }
+
+    chart.update();
+}
+
+socket.on("update", (data) => {
+
+    const table = document.getElementById('data');
+    table.innerHTML = '';
+
+    let latestLatency = 0;
+
+    data.forEach(item => {
+
+        latestLatency = item.response_time;
+
+        table.innerHTML += `
+            <tr>
+                <td>${item.id}</td>
+                <td>${item.name}</td>
+                <td>${item.url}</td>
+                <td class="${item.status === 'UP' ? 'up' : 'down'}">${item.status}</td>
+                <td>${item.response_time} ms</td>
+                <td>${item.total_checks}</td>
+                <td>${item.uptime.toFixed(2)}%</td>
+            </tr>
+        `;
+    });
+
+    if (latestLatency > 0) {
+        updateChart(latestLatency);
+    }
+});
+
+initChart();
+
+</script>
+
+</body>
+</html>
