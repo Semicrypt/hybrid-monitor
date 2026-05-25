@@ -9,14 +9,29 @@ const PORT = process.env.PORT || 5000
 app.use(cors())
 app.use(express.json())
 
-// ================= POSTGRES DATABASE =================
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
-})
+// ================= DEBUG LOGS =================
+console.log("Server starting...")
+console.log("PORT:", PORT)
+console.log("DATABASE_URL exists:", !!process.env.DATABASE_URL)
+
+// ================= POSTGRES SETUP =================
+let pool
+
+try {
+  pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DATABASE_URL
+      ? { rejectUnauthorized: false }
+      : false
+  })
+
+  console.log("PostgreSQL pool created successfully")
+} catch (err) {
+  console.error("Failed to create DB pool:", err)
+}
 
 // ================= CREATE TABLE =================
-pool.query(`
+pool?.query(`
 CREATE TABLE IF NOT EXISTS services (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
@@ -26,9 +41,13 @@ CREATE TABLE IF NOT EXISTS services (
   total_checks INTEGER DEFAULT 0,
   failed_checks INTEGER DEFAULT 0
 )
-`).catch(err => console.error('DB Error:', err.message))
+`).then(() => {
+  console.log("Database table ready")
+}).catch(err => {
+  console.error("Table creation error:", err.message)
+})
 
-// ================= CHECK SERVICE =================
+// ================= SERVICE CHECK =================
 async function checkService(service) {
   const start = Date.now()
 
@@ -39,20 +58,20 @@ async function checkService(service) {
 
     await pool.query(
       `UPDATE services
-       SET status = $1,
-           response_time = $2,
-           total_checks = total_checks + 1
-       WHERE id = $3`,
+       SET status=$1,
+           response_time=$2,
+           total_checks=total_checks+1
+       WHERE id=$3`,
       ['UP', responseTime, service.id]
     )
 
   } catch (err) {
     await pool.query(
       `UPDATE services
-       SET status = $1,
-           failed_checks = failed_checks + 1,
-           total_checks = total_checks + 1
-       WHERE id = $2`,
+       SET status=$1,
+           failed_checks=failed_checks+1,
+           total_checks=total_checks+1
+       WHERE id=$2`,
       ['DOWN', service.id]
     )
   }
@@ -64,7 +83,7 @@ function monitorServices() {
     .then(result => {
       result.rows.forEach(checkService)
     })
-    .catch(err => console.error(err.message))
+    .catch(err => console.error("Monitor error:", err.message))
 }
 
 setInterval(monitorServices, 30000)
@@ -75,7 +94,6 @@ app.get('/', (req, res) => {
   res.send('Hybrid Monitoring System Running (PostgreSQL)')
 })
 
-// ADD SERVICE
 app.post('/services', async (req, res) => {
   const { name, url } = req.body
 
@@ -92,27 +110,29 @@ app.post('/services', async (req, res) => {
     )
 
     res.json(result.rows[0])
+
   } catch (err) {
+    console.error("POST error:", err.message)
     res.status(500).json({ error: err.message })
   }
 })
 
-// DASHBOARD
 app.get('/dashboard', async (req, res) => {
   try {
     const result = await pool.query(`SELECT * FROM services`)
     res.json(result.rows)
   } catch (err) {
+    console.error("Dashboard error:", err.message)
     res.status(500).json({ error: err.message })
   }
 })
 
-// DELETE SERVICE
 app.delete('/services/:id', async (req, res) => {
   try {
-    await pool.query(`DELETE FROM services WHERE id = $1`, [req.params.id])
-    res.json({ message: 'Service deleted successfully' })
+    await pool.query(`DELETE FROM services WHERE id=$1`, [req.params.id])
+    res.json({ message: 'Deleted successfully' })
   } catch (err) {
+    console.error("Delete error:", err.message)
     res.status(500).json({ error: err.message })
   }
 })
