@@ -1,7 +1,7 @@
 const express = require('express')
 const cors = require('cors')
 const axios = require('axios')
-const sqlite3 = require('sqlite3').verbose()
+const { Pool } = require('pg')
 
 const app = express()
 const PORT = process.env.PORT || 5000
@@ -9,19 +9,18 @@ const PORT = process.env.PORT || 5000
 app.use(cors())
 app.use(express.json())
 
-// ================= DATABASE =================
-const db = new sqlite3.Database('./monitoring.db', (err) => {
-  if (err) {
-    console.error('Database error:', err.message)
-  } else {
-    console.log('Connected to SQLite database.')
-  }
+// ================= POSTGRES CONNECTION =================
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL
+    ? { rejectUnauthorized: false }
+    : false
 })
 
-// ================= CREATE TABLE (SAFE FOR NEW DB) =================
-db.run(`
+// ================= CREATE TABLE =================
+pool.query(`
 CREATE TABLE IF NOT EXISTS services (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
   url TEXT NOT NULL,
   status TEXT DEFAULT 'UNKNOWN',
@@ -29,33 +28,9 @@ CREATE TABLE IF NOT EXISTS services (
   total_checks INTEGER DEFAULT 0,
   failed_checks INTEGER DEFAULT 0
 )
-`)
+`).catch(err => console.error(err.message))
 
-// ================= AUTO MIGRATION (FIX OLD RENDER DB) =================
-db.serialize(() => {
-  db.all(`PRAGMA table_info(services)`, (err, columns) => {
-    if (err) {
-      console.error(err.message)
-      return
-    }
-
-    if (!columns) return
-
-    const hasFailedChecks = columns.some(c => c.name === 'failed_checks')
-
-    if (!hasFailedChecks) {
-      db.run(`
-        ALTER TABLE services ADD COLUMN failed_checks INTEGER DEFAULT 0
-      `, (err) => {
-        if (!err) {
-          console.log('Migrated DB: added failed_checks column')
-        }
-      })
-    }
-  })
-})
-
-// ================= SERVICE CHECKER =================
+// ================= SERVICE CHECK =================
 async function checkService(service) {
   const start = Date.now()
 
@@ -64,35 +39,34 @@ async function checkService(service) {
 
     const responseTime = Date.now() - start
 
-    db.run(`
-      UPDATE services
-      SET status = ?,
-          response_time = ?,
-          total_checks = total_checks + 1
-      WHERE id = ?
-    `, ['UP', responseTime, service.id])
+    await pool.query(
+      `UPDATE services
+       SET status=$1,
+           response_time=$2,
+           total_checks=total_checks+1
+       WHERE id=$3`,
+      ['UP', responseTime, service.id]
+    )
 
   } catch (err) {
-    db.run(`
-      UPDATE services
-      SET status = ?,
-          failed_checks = COALESCE(failed_checks,0) + 1,
-          total_checks = total_checks + 1
-      WHERE id = ?
-    `, ['DOWN', service.id])
+    await pool.query(
+      `UPDATE services
+       SET status=$1,
+           failed_checks=failed_checks+1,
+           total_checks=total_checks+1
+       WHERE id=$2`,
+      ['DOWN', service.id]
+    )
   }
 }
 
 // ================= MONITOR LOOP =================
 function monitorServices() {
-  db.all(`SELECT * FROM services`, [], (err, rows) => {
-    if (err) {
-      console.error(err.message)
-      return
-    }
-
-    rows.forEach(checkService)
-  })
+  pool.query(`SELECT * FROM services`)
+    .then(result => {
+      result.rows.forEach(checkService)
+    })
+    .catch(err => console.error(err.message))
 }
 
 setInterval(monitorServices, 30000)
@@ -100,55 +74,49 @@ setInterval(monitorServices, 30000)
 // ================= ROUTES =================
 
 app.get('/', (req, res) => {
-  res.send('Hybrid Monitoring System Running')
+  res.send('Hybrid Monitoring System Running (PostgreSQL)')
 })
 
-app.post('/services', (req, res) => {
+// ADD SERVICE
+app.post('/services', async (req, res) => {
   const { name, url } = req.body
 
   if (!name || !url) {
     return res.status(400).json({ error: 'Name and URL required' })
   }
 
-  db.run(
-    `INSERT INTO services (name, url) VALUES (?, ?)`,
-    [name, url],
-    function (err) {
-      if (err) {
-        return res.status(500).json({ error: err.message })
-      }
+  try {
+    const result = await pool.query(
+      `INSERT INTO services (name, url)
+       VALUES ($1, $2)
+       RETURNING *`,
+      [name, url]
+    )
 
-      res.json({
-        id: this.lastID,
-        name,
-        url
-      })
-    }
-  )
+    res.json(result.rows[0])
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
 })
 
-app.get('/dashboard', (req, res) => {
-  db.all(`SELECT * FROM services`, [], (err, rows) => {
-    if (err) {
-      return res.status(500).json({ error: err.message })
-    }
-
-    res.json(rows)
-  })
+// GET DASHBOARD
+app.get('/dashboard', async (req, res) => {
+  try {
+    const result = await pool.query(`SELECT * FROM services`)
+    res.json(result.rows)
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
 })
 
-app.delete('/services/:id', (req, res) => {
-  db.run(
-    `DELETE FROM services WHERE id = ?`,
-    [req.params.id],
-    function (err) {
-      if (err) {
-        return res.status(500).json({ error: err.message })
-      }
-
-      res.json({ message: 'Service deleted successfully' })
-    }
-  )
+// DELETE SERVICE
+app.delete('/services/:id', async (req, res) => {
+  try {
+    await pool.query(`DELETE FROM services WHERE id=$1`, [req.params.id])
+    res.json({ message: 'Service deleted successfully' })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
 })
 
 // ================= START SERVER =================
