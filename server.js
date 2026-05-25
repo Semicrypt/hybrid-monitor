@@ -1,3 +1,12 @@
+const fs = require('fs')
+
+try {
+  fs.unlinkSync('./monitoring.db')
+  console.log('Old DB removed')
+} catch (e) {
+  console.log('No old DB found')
+}
+
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
