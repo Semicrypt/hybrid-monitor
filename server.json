@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 5000
 app.use(cors())
 app.use(express.json())
 
-// ===================== DATABASE =====================
+// DATABASE
 const db = new sqlite3.Database('./monitoring.db', (err) => {
   if (err) {
     console.error('Database error:', err.message)
@@ -18,7 +18,7 @@ const db = new sqlite3.Database('./monitoring.db', (err) => {
   }
 })
 
-// ===================== TABLE SETUP =====================
+// TABLE
 db.run(`
 CREATE TABLE IF NOT EXISTS services (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,12 +31,18 @@ CREATE TABLE IF NOT EXISTS services (
 )
 `)
 
-// SAFE MIGRATION (ignore errors if column already exists)
-db.run(`
-ALTER TABLE services ADD COLUMN failed_checks INTEGER DEFAULT 0
-`, () => {})
+// SAFE MIGRATION (fix old Render DB)
+db.all(`PRAGMA table_info(services)`, (err, columns) => {
+  if (!err && columns) {
+    const exists = columns.some(c => c.name === 'failed_checks')
 
-// ===================== SERVICE CHECKER =====================
+    if (!exists) {
+      db.run(`ALTER TABLE services ADD COLUMN failed_checks INTEGER DEFAULT 0`)
+    }
+  }
+})
+
+// CHECK SERVICE
 async function checkService(service) {
   const start = Date.now()
 
@@ -57,29 +63,25 @@ async function checkService(service) {
     db.run(`
       UPDATE services
       SET status = ?,
-          failed_checks = COALESCE(failed_checks, 0) + 1,
+          failed_checks = COALESCE(failed_checks,0) + 1,
           total_checks = total_checks + 1
       WHERE id = ?
     `, ['DOWN', service.id])
   }
 }
 
-// ===================== MONITOR LOOP =====================
+// MONITOR LOOP
 function monitorServices() {
   db.all(`SELECT * FROM services`, [], (err, rows) => {
-    if (err) {
-      console.error(err.message)
-      return
+    if (!err) {
+      rows.forEach(checkService)
     }
-
-    rows.forEach(checkService)
   })
 }
 
 setInterval(monitorServices, 30000)
 
-// ===================== ROUTES =====================
-
+// ROUTES
 app.get('/', (req, res) => {
   res.send('Hybrid Monitoring System Running')
 })
@@ -91,14 +93,15 @@ app.post('/services', (req, res) => {
     return res.status(400).json({ error: 'Name and URL required' })
   }
 
-  db.run(`
-    INSERT INTO services (name, url)
-    VALUES (?, ?)
-  `, [name, url], function (err) {
-    if (err) return res.status(500).json({ error: err.message })
+  db.run(
+    `INSERT INTO services (name, url) VALUES (?, ?)`,
+    [name, url],
+    function (err) {
+      if (err) return res.status(500).json({ error: err.message })
 
-    res.json({ id: this.lastID, name, url })
-  })
+      res.json({ id: this.lastID, name, url })
+    }
+  )
 })
 
 app.get('/dashboard', (req, res) => {
@@ -117,7 +120,7 @@ app.delete('/services/:id', (req, res) => {
   })
 })
 
-// ===================== START SERVER =====================
+// START
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`)
 })
