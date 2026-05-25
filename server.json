@@ -9,12 +9,10 @@ const PORT = process.env.PORT || 5000
 app.use(cors())
 app.use(express.json())
 
-// ================= POSTGRES CONNECTION =================
+// ================= POSTGRES DATABASE =================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL
-    ? { rejectUnauthorized: false }
-    : false
+  ssl: { rejectUnauthorized: false }
 })
 
 // ================= CREATE TABLE =================
@@ -28,9 +26,9 @@ CREATE TABLE IF NOT EXISTS services (
   total_checks INTEGER DEFAULT 0,
   failed_checks INTEGER DEFAULT 0
 )
-`).catch(err => console.error(err.message))
+`).catch(err => console.error('DB Error:', err.message))
 
-// ================= SERVICE CHECK =================
+// ================= CHECK SERVICE =================
 async function checkService(service) {
   const start = Date.now()
 
@@ -41,20 +39,20 @@ async function checkService(service) {
 
     await pool.query(
       `UPDATE services
-       SET status=$1,
-           response_time=$2,
-           total_checks=total_checks+1
-       WHERE id=$3`,
+       SET status = $1,
+           response_time = $2,
+           total_checks = total_checks + 1
+       WHERE id = $3`,
       ['UP', responseTime, service.id]
     )
 
   } catch (err) {
     await pool.query(
       `UPDATE services
-       SET status=$1,
-           failed_checks=failed_checks+1,
-           total_checks=total_checks+1
-       WHERE id=$2`,
+       SET status = $1,
+           failed_checks = failed_checks + 1,
+           total_checks = total_checks + 1
+       WHERE id = $2`,
       ['DOWN', service.id]
     )
   }
@@ -99,7 +97,7 @@ app.post('/services', async (req, res) => {
   }
 })
 
-// GET DASHBOARD
+// DASHBOARD
 app.get('/dashboard', async (req, res) => {
   try {
     const result = await pool.query(`SELECT * FROM services`)
@@ -112,7 +110,7 @@ app.get('/dashboard', async (req, res) => {
 // DELETE SERVICE
 app.delete('/services/:id', async (req, res) => {
   try {
-    await pool.query(`DELETE FROM services WHERE id=$1`, [req.params.id])
+    await pool.query(`DELETE FROM services WHERE id = $1`, [req.params.id])
     res.json({ message: 'Service deleted successfully' })
   } catch (err) {
     res.status(500).json({ error: err.message })
