@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const Database = require('better-sqlite3');
+const sqlite3 = require('sqlite3').verbose();
 const http = require('http');
 const { Server } = require('socket.io');
 
@@ -12,165 +12,145 @@ const io = new Server(server, { cors: { origin: "*" } });
 app.use(cors());
 app.use(express.json());
 
-/* =======================
-   🔐 TELEGRAM CONFIG
-   ======================= */
-const TELEGRAM_TOKEN = "8548631177:AAGQtd3BUbZbXaaPzOSt6hbke6d4thnKOqA";
-const CHAT_ID = "6789591477";
+/* ================= DATABASE ================= */
+const db = new sqlite3.Database('./monitor.db');
 
-/* =======================
-   DATABASE
-   ======================= */
-const db = new Database('monitor.db');
+db.serialize(() => {
+    db.run(`
+        CREATE TABLE IF NOT EXISTS services (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            url TEXT,
+            status TEXT DEFAULT 'UNKNOWN',
+            response_time INTEGER DEFAULT 0,
+            total_checks INTEGER DEFAULT 0,
+            failed_checks INTEGER DEFAULT 0,
+            uptime REAL DEFAULT 100
+        )
+    `);
+});
 
-db.prepare(`
-CREATE TABLE IF NOT EXISTS services (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    url TEXT,
-    status TEXT DEFAULT 'UNKNOWN',
-    response_time INTEGER DEFAULT 0,
-    total_checks INTEGER DEFAULT 0,
-    failed_checks INTEGER DEFAULT 0,
-    uptime REAL DEFAULT 100
-)
-`).run();
+/* ================= TELEGRAM (OPTIONAL) ================= */
+const TELEGRAM_TOKEN = "";
+const CHAT_ID = "";
 
-/* =======================
-   TELEGRAM ALERT FUNCTION
-   ======================= */
 async function sendAlert(message) {
-    const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
+    if (!TELEGRAM_TOKEN || !CHAT_ID) return;
 
     try {
-        await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
+        await axios.post(
+            `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+            {
                 chat_id: CHAT_ID,
                 text: message
-            })
-        });
+            }
+        );
     } catch (err) {
-        console.log("Telegram error:", err.message);
+        console.log("Telegram error");
     }
 }
 
-/* =======================
-   STATE TRACKING
-   ======================= */
+/* ================= STATE ================= */
 const serviceState = {};
 
-/* =======================
-   ADD SERVICE
-   ======================= */
+/* ================= ADD SERVICE ================= */
 app.post('/services', (req, res) => {
     const { name, url } = req.body;
 
-    const stmt = db.prepare(`
-        INSERT INTO services (name, url)
-        VALUES (?, ?)
-    `);
+    db.run(
+        `INSERT INTO services (name, url) VALUES (?, ?)`,
+        [name, url],
+        function () {
+            emitUpdate();
+            res.json({ message: "Service added", id: this.lastID });
+        }
+    );
+});
 
-    const result = stmt.run(name, url);
-
-    emitUpdate();
-
-    res.json({
-        message: "Service added",
-        serviceId: result.lastInsertRowid
+/* ================= DASHBOARD ================= */
+app.get('/dashboard', (req, res) => {
+    db.all(`SELECT * FROM services`, [], (err, rows) => {
+        res.json(rows);
     });
 });
 
-/* =======================
-   DASHBOARD
-   ======================= */
-app.get('/dashboard', (req, res) => {
-    res.json(db.prepare(`SELECT * FROM services`).all());
-});
-
-/* =======================
-   MONITORING ENGINE
-   ======================= */
+/* ================= MONITOR ================= */
 function checkServices() {
-    const services = db.prepare(`SELECT * FROM services`).all();
+    db.all(`SELECT * FROM services`, [], (err, services) => {
 
-    for (const service of services) {
+        services.forEach(service => {
 
-        const start = Date.now();
+            const start = Date.now();
 
-        axios.get(service.url, { timeout: 5000 })
-        .then(async () => {
+            axios.get(service.url, { timeout: 5000 })
+                .then(async () => {
 
-            const wasDown = serviceState[service.id] === "DOWN";
-            serviceState[service.id] = "UP";
+                    const responseTime = Date.now() - start;
 
-            const responseTime = Date.now() - start;
+                    const total = service.total_checks + 1;
+                    const failed = service.failed_checks;
 
-            const total = service.total_checks + 1;
-            const failed = service.failed_checks;
+                    const uptime = ((total - failed) / total) * 100;
 
-            const uptime = ((total - failed) / total) * 100;
+                    db.run(`
+                        UPDATE services
+                        SET status='UP',
+                            response_time=?,
+                            total_checks=?,
+                            uptime=?
+                        WHERE id=?
+                    `, [responseTime, total, uptime, service.id]);
 
-            db.prepare(`
-                UPDATE services
-                SET status='UP',
-                    response_time=?,
-                    total_checks=?,
-                    uptime=?
-                WHERE id=?
-            `).run(responseTime, total, uptime, service.id);
+                    if (serviceState[service.id] === "DOWN") {
+                        await sendAlert(`✅ RECOVERED: ${service.name}`);
+                    }
 
-            if (wasDown) {
-                await sendAlert(`✅ RECOVERED\n${service.name}\n${service.url}`);
-            }
+                    serviceState[service.id] = "UP";
 
-            emitUpdate();
-        })
+                    emitUpdate();
+                })
+                .catch(async () => {
 
-        .catch(async () => {
+                    const total = service.total_checks + 1;
+                    const failed = service.failed_checks + 1;
 
-            const wasUp = serviceState[service.id] !== "DOWN";
-            serviceState[service.id] = "DOWN";
+                    const uptime = ((total - failed) / total) * 100;
 
-            const total = service.total_checks + 1;
-            const failed = service.failed_checks + 1;
+                    db.run(`
+                        UPDATE services
+                        SET status='DOWN',
+                            total_checks=?,
+                            failed_checks=?,
+                            uptime=?
+                        WHERE id=?
+                    `, [total, failed, uptime, service.id]);
 
-            const uptime = ((total - failed) / total) * 100;
+                    if (serviceState[service.id] !== "DOWN") {
+                        await sendAlert(`🚨 DOWN: ${service.name}`);
+                    }
 
-            db.prepare(`
-                UPDATE services
-                SET status='DOWN',
-                    total_checks=?,
-                    failed_checks=?,
-                    uptime=?
-                WHERE id=?
-            `).run(total, failed, uptime, service.id);
+                    serviceState[service.id] = "DOWN";
 
-            if (wasUp) {
-                await sendAlert(`🚨 DOWN\n${service.name}\n${service.url}`);
-            }
-
-            emitUpdate();
+                    emitUpdate();
+                });
         });
-    }
+    });
 }
 
-/* =======================
-   SOCKET.IO
-   ======================= */
+/* ================= SOCKET ================= */
 function emitUpdate() {
-    const data = db.prepare(`SELECT * FROM services`).all();
-    io.emit('update', data);
+    db.all(`SELECT * FROM services`, [], (err, rows) => {
+        io.emit('update', rows);
+    });
 }
 
 io.on('connection', (socket) => {
-    socket.emit('update', db.prepare(`SELECT * FROM services`).all());
+    db.all(`SELECT * FROM services`, [], (err, rows) => {
+        socket.emit('update', rows);
+    });
 });
 
-/* =======================
-   START
-   ======================= */
+/* ================= START ================= */
 setInterval(checkServices, 10000);
 
 server.listen(5000, () => {

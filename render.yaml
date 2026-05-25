@@ -1,6 +1,10 @@
+cd ~/hybrid-monitoring
+cat > render.yaml << 'EOF'
 services:
   - type: web
     name: hybrid-monitor
     env: node
+    plan: free
     buildCommand: npm install
     startCommand: npm start
+EOF
