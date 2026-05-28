@@ -1,0 +1,617 @@
+<!-- public/index.html -->
+
+<!DOCTYPE html>
+<html>
+
+<head>
+
+  <title>
+    Professional Uptime Dashboard
+  </title>
+
+  <script src="/socket.io/socket.io.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+
+    body {
+
+      margin: 0;
+
+      font-family: Arial;
+
+      background: #0f172a;
+
+      color: white;
+    }
+
+    .header {
+
+      background: #111827;
+
+      padding: 20px;
+
+      font-size: 24px;
+
+      font-weight: bold;
+    }
+
+    .container {
+
+      padding: 20px;
+    }
+
+    .controls {
+
+      display: flex;
+
+      gap: 10px;
+
+      flex-wrap: wrap;
+
+      margin-bottom: 20px;
+    }
+
+    input {
+
+      padding: 10px;
+
+      border: none;
+
+      border-radius: 8px;
+
+      width: 220px;
+
+      outline: none;
+    }
+
+    button {
+
+      padding: 10px 16px;
+
+      border: none;
+
+      border-radius: 8px;
+
+      background: #2563eb;
+
+      color: white;
+
+      cursor: pointer;
+    }
+
+    button:hover {
+
+      background: #1d4ed8;
+    }
+
+    .stats {
+
+      display: flex;
+
+      gap: 15px;
+
+      margin-bottom: 20px;
+
+      flex-wrap: wrap;
+    }
+
+    .stat {
+
+      background: #111827;
+
+      padding: 15px;
+
+      border-radius: 12px;
+
+      border: 1px solid #1f2937;
+
+      min-width: 120px;
+    }
+
+    .grid {
+
+      display: grid;
+
+      grid-template-columns:
+      repeat(auto-fit, minmax(280px, 1fr));
+
+      gap: 15px;
+    }
+
+    .card {
+
+      background: #111827;
+
+      padding: 20px;
+
+      border-radius: 14px;
+
+      border: 1px solid #1f2937;
+
+      transition: 0.3s;
+    }
+
+    .card:hover {
+
+      transform: translateY(-4px);
+
+      border-color: #2563eb;
+    }
+
+    .up {
+
+      color: #22c55e;
+
+      font-weight: bold;
+    }
+
+    .down {
+
+      color: #ef4444;
+
+      font-weight: bold;
+    }
+
+    canvas {
+
+      margin-top: 25px;
+
+      background: #111827;
+
+      padding: 15px;
+
+      border-radius: 12px;
+    }
+
+    #history {
+
+      margin-top: 30px;
+
+      background: #111827;
+
+      padding: 15px;
+
+      border-radius: 12px;
+    }
+
+    .history-item {
+
+      padding: 10px;
+
+      border-bottom:
+      1px solid #1f2937;
+    }
+
+  </style>
+
+</head>
+
+<body>
+
+<div class="header">
+  🚀 Professional Uptime Dashboard
+</div>
+
+<div class="container">
+
+  <!-- ================= CONTROLS ================= -->
+  <div class="controls">
+
+    <input
+      id="name"
+      placeholder="Service Name"
+    >
+
+    <input
+      id="url"
+      placeholder="https://example.com"
+    >
+
+    <button onclick="addService()">
+      ➕ Add
+    </button>
+
+    <button onclick="startMonitoring()">
+      ▶ Start
+    </button>
+
+    <button onclick="stopMonitoring()">
+      ⏸ Stop
+    </button>
+
+    <button onclick="refreshPage()">
+      🔄 Refresh
+    </button>
+
+  </div>
+
+  <!-- ================= STATS ================= -->
+  <div class="stats">
+
+    <div class="stat">
+      Total:
+      <span id="total">0</span>
+    </div>
+
+    <div class="stat">
+      UP:
+      <span id="up">0</span>
+    </div>
+
+    <div class="stat">
+      DOWN:
+      <span id="down">0</span>
+    </div>
+
+  </div>
+
+  <!-- ================= CARDS ================= -->
+  <div
+    id="grid"
+    class="grid"
+  ></div>
+
+  <!-- ================= CHART ================= -->
+  <canvas id="chart"></canvas>
+
+  <!-- ================= HISTORY ================= -->
+  <h2 style="margin-top:30px;">
+    📜 Recent Events
+  </h2>
+
+  <div id="history"></div>
+
+</div>
+
+<script>
+
+const socket = io()
+
+let running = true
+
+let labels = []
+
+let data = []
+
+let chart
+
+let servicesState = {}
+
+// ================= ADD SERVICE =================
+async function addService() {
+
+  const name =
+    document
+      .getElementById('name')
+      .value
+      .trim()
+
+  const url =
+    document
+      .getElementById('url')
+      .value
+      .trim()
+
+  if (!name || !url) {
+
+    return alert(
+      'Fill all fields'
+    )
+  }
+
+  await fetch('/services', {
+
+    method: 'POST',
+
+    headers: {
+
+      'Content-Type':
+      'application/json'
+    },
+
+    body: JSON.stringify({
+
+      name,
+
+      url
+    })
+  })
+
+  document
+    .getElementById('name')
+    .value = ''
+
+  document
+    .getElementById('url')
+    .value = ''
+}
+
+// ================= CONTROLS =================
+async function startMonitoring() {
+
+  running = true
+
+  await fetch('/start')
+}
+
+async function stopMonitoring() {
+
+  running = false
+
+  await fetch('/stop')
+}
+
+function refreshPage() {
+
+  location.reload()
+}
+
+// ================= DELETE =================
+async function deleteService(id) {
+
+  await fetch(
+    '/services/' + id,
+    {
+      method: 'DELETE'
+    }
+  )
+
+  const card =
+    document.getElementById(
+      'card-' + id
+    )
+
+  if (card) {
+
+    card.remove()
+  }
+}
+
+// ================= UPDATE STATS =================
+function updateStats() {
+
+  const values =
+    Object.values(
+      servicesState
+    )
+
+  const total =
+    values.length
+
+  const up =
+    values.filter(
+      v => v.status === 'UP'
+    ).length
+
+  const down =
+    values.filter(
+      v => v.status === 'DOWN'
+    ).length
+
+  document
+    .getElementById('total')
+    .innerText = total
+
+  document
+    .getElementById('up')
+    .innerText = up
+
+  document
+    .getElementById('down')
+    .innerText = down
+}
+
+// ================= RENDER CARD =================
+function renderCard(
+  service,
+  status,
+  responseTime
+) {
+
+  let card =
+    document.getElementById(
+      'card-' + service.id
+    )
+
+  if (!card) {
+
+    card =
+      document.createElement('div')
+
+    card.className = 'card'
+
+    card.id =
+      'card-' + service.id
+
+    document
+      .getElementById('grid')
+      .appendChild(card)
+  }
+
+  card.innerHTML = `
+
+    <h2>${service.name}</h2>
+
+    <p style="opacity:0.7;">
+      ${service.url}
+    </p>
+
+    <div
+      class="${
+        status === 'UP'
+        ? 'up'
+        : 'down'
+      }"
+
+      style="
+        font-size:20px;
+        margin-top:10px;
+      "
+    >
+
+      ${status}
+
+    </div>
+
+    <div style="margin-top:10px;">
+      ⚡ Response:
+      ${responseTime}ms
+    </div>
+
+    <div style="margin-top:10px;">
+      📊 Uptime:
+      ${service.uptime}%
+    </div>
+
+    <div style="margin-top:10px;">
+      ✅ Checks:
+      ${service.checks}
+    </div>
+
+    <div style="margin-top:10px;">
+      ❌ Fails:
+      ${service.fails}
+    </div>
+
+    <div style="margin-top:15px;">
+
+      <button
+        onclick="deleteService(${service.id})"
+      >
+        🗑 Delete
+      </button>
+
+    </div>
+
+  `
+}
+
+// ================= HISTORY =================
+async function loadHistory() {
+
+  const res =
+    await fetch('/history')
+
+  const data =
+    await res.json()
+
+  const historyDiv =
+    document.getElementById(
+      'history'
+    )
+
+  historyDiv.innerHTML = ''
+
+  data.forEach(item => {
+
+    historyDiv.innerHTML += `
+
+      <div class="history-item">
+
+        ${item.time}
+
+        —
+
+        ${item.service}
+
+        —
+
+        ${item.status}
+
+        —
+
+        ${item.responseTime}ms
+
+      </div>
+    `
+  })
+}
+
+// ================= SOCKET =================
+socket.on('update', (d) => {
+
+  if (!running) return
+
+  const s = d.service
+
+  servicesState[s.id] = {
+
+    status: d.status
+  }
+
+  renderCard(
+    s,
+    d.status,
+    d.responseTime
+  )
+
+  updateStats()
+
+  loadHistory()
+
+  // ================= CHART =================
+  const time =
+    new Date()
+    .toLocaleTimeString()
+
+  labels.push(time)
+
+  data.push(d.responseTime)
+
+  if (labels.length > 20) {
+
+    labels.shift()
+
+    data.shift()
+  }
+
+  if (!chart) {
+
+    chart = new Chart(
+
+      document
+        .getElementById('chart'),
+
+      {
+
+        type: 'line',
+
+        data: {
+
+          labels,
+
+          datasets: [{
+
+            label:
+            'Response Time (ms)',
+
+            data,
+
+            borderColor:
+            '#22c55e',
+
+            tension: 0.3
+          }]
+        }
+      }
+
+    )
+
+  } else {
+
+    chart.data.labels =
+      labels
+
+    chart.data.datasets[0].data =
+      data
+
+    chart.update()
+  }
+})
+
+</script>
+
+</body>
+</html>

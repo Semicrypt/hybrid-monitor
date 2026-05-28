@@ -1,26 +1,79 @@
-console.log("🚀 SERVER FILE LOADED")
-
-process.on('uncaughtException', (err) => {
-  console.error('❌ UNCAUGHT EXCEPTION:', err)
-})
-
-process.on('unhandledRejection', (err) => {
-  console.error('❌ UNHANDLED REJECTION:', err)
-})
-
 const express = require('express')
-const app = express()
+const cors = require('cors')
 
+const app = express()
 const PORT = process.env.PORT || 5000
 
-console.log("🔌 PORT =", PORT)
-console.log("🔑 DATABASE_URL exists =", !!process.env.DATABASE_URL)
+app.use(cors())
+app.use(express.json())
 
-// TEMP TEST ROUTE ONLY
+console.log("Server starting...")
+console.log("PORT:", PORT)
+
+// ================= IN-MEMORY DATABASE =================
+let services = []
+
+// ================= ROUTES =================
+
+// HOME
 app.get('/', (req, res) => {
-  res.send('Server is alive')
+  res.send('Hybrid Monitoring System Running (LOCAL MODE)')
 })
 
+// ADD SERVICE
+app.post('/services', (req, res) => {
+  const { name, url } = req.body
+
+  if (!name || !url) {
+    return res.status(400).json({ error: 'Name and URL required' })
+  }
+
+  const newService = {
+    id: Date.now(),
+    name,
+    url,
+    status: 'UNKNOWN',
+    response_time: 0,
+    total_checks: 0,
+    failed_checks: 0
+  }
+
+  services.push(newService)
+
+  res.json(newService)
+})
+
+// GET DASHBOARD
+app.get('/dashboard', (req, res) => {
+  res.json(services)
+})
+
+// DELETE SERVICE
+app.delete('/services/:id', (req, res) => {
+  services = services.filter(s => s.id != req.params.id)
+  res.json({ message: 'Service deleted successfully' })
+})
+
+// SIMPLE CHECK FUNCTION (MOCK)
+function checkServices() {
+  services = services.map(service => {
+    const isUp = Math.random() > 0.3 // fake status
+
+    return {
+      ...service,
+      status: isUp ? 'UP' : 'DOWN',
+      response_time: Math.floor(Math.random() * 300),
+      total_checks: service.total_checks + 1,
+      failed_checks: isUp
+        ? service.failed_checks
+        : service.failed_checks + 1
+    }
+  })
+}
+
+setInterval(checkServices, 10000)
+
+// START SERVER
 app.listen(PORT, () => {
-  console.log("✅ SERVER STARTED SUCCESSFULLY ON PORT", PORT)
+  console.log(`Server running on port ${PORT}`)
 })
